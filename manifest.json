@@ -1,0 +1,12 @@
+{
+  "name": "Полюс-6 — математическая экспедиция",
+  "short_name": "Полюс-6",
+  "description": "Тренажёр по математике для 6 класса: масштаб, доли, проценты — в полярной экспедиции",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0e2233",
+  "theme_color": "#1d3b53",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
