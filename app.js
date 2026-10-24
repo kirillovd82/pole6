@@ -608,6 +608,16 @@ function remoteCardHtml(s) {
 async function openRemoteStage(id) {
   const local = DATA.caseList.find(c => c.id === id);
   if (local) { location.hash = '#case/' + id; route(); return; }
+  const prevId = String(Number(id) - 1);
+  const prevDone = P().bosses[prevId] && P().bosses[prevId].done;
+  if (Number(id) > 1 && !prevDone) {
+    const meta = DATA.caseList.find(c => c.id === prevId) || DATA.remoteStages.find(s => s.id === prevId);
+    const name = meta ? '«' + esc(meta.title) + '»' : '';
+    showModal(`<h2>Сначала этап №${prevId}</h2>
+      <p>Маршрут идёт по порядку: этап №${id} откроется, когда будет взят перевал этапа №${prevId} ${name}. Так задачи не обгонят друг друга.</p>
+      <button class="gold" onclick="closeModal()">Понятно</button>`);
+    return;
+  }
   if (!window.PLATFORM) { toast('Аккаунты не подключены'); return; }
   if (remoteLoading) return;
   remoteLoading = true;
