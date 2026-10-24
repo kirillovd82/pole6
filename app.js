@@ -608,13 +608,16 @@ function remoteCardHtml(s) {
 async function openRemoteStage(id) {
   const local = DATA.caseList.find(c => c.id === id);
   if (local) { location.hash = '#case/' + id; route(); return; }
-  const prevId = String(Number(id) - 1);
-  const prevDone = P().bosses[prevId] && P().bosses[prevId].done;
-  if (Number(id) > 1 && !prevDone) {
-    const meta = DATA.caseList.find(c => c.id === prevId) || DATA.remoteStages.find(s => s.id === prevId);
-    const name = meta ? '«' + esc(meta.title) + '»' : '';
-    showModal(`<h2>Сначала этап №${prevId}</h2>
-      <p>Маршрут идёт по порядку: этап №${id} откроется, когда будет взят перевал этапа №${prevId} ${name}. Так задачи не обгонят друг друга.</p>
+  const ordered = DATA.caseList.slice().sort((a, b) => a.num - b.num)
+    .concat((DATA.remoteStages || []).filter(s => !DATA.caseList.some(c => c.id === s.id))
+      .map(s => ({ id: s.id, num: Number(s.id), title: s.title }))
+      .sort((a, b) => a.num - b.num));
+  const pos = ordered.findIndex(s => String(s.id) === String(id));
+  const prev = pos > 0 ? ordered[pos - 1] : null;
+  const prevDone = prev && P().bosses[prev.id] && P().bosses[prev.id].done;
+  if (prev && !prevDone) {
+    showModal(`<h2>Сначала этап №${prev.num}</h2>
+      <p>Маршрут идёт по порядку: этап №${id} откроется, когда будет взят перевал этапа №${prev.num} «${esc(prev.title)}». Так задачи не обгонят друг друга.</p>
       <button class="gold" onclick="closeModal()">Понятно</button>`);
     return;
   }
