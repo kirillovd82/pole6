@@ -53,6 +53,7 @@ function newProfile(name, emoji) {
     mysterySolved: false,
     mysteryV2: true,
     junctions: {},  // j1 -> {choice, coins}
+    time: {},       // 'YYYY-MM-DD' -> секунды занятий
     achievements: [],
     activity: [],
     views: {},      // 'c1/p1' -> дата первого просмотра
@@ -453,6 +454,7 @@ function route() {
   if (h === '' || h === 'map') renderMap();
   else if (h.startsWith('case/')) renderCase(h.split('/')[1]);
   else if (h === 'exam') renderExam();
+  else if (h === 'cabinet') renderCabinet();
   else if (h === 'mystery') renderMystery();
   else if (h === 'ach') renderAch();
   else if (h === 'admin') renderAdmin();
@@ -479,7 +481,7 @@ function headerHtml(active) {
   } else {
     safeBar = `<div class="safe-progress"><span>🗄️ Все ящики вскрыты — ты легенда экспедиции!</span></div>`;
   }
-  const links = [['map', '🗺️ Маршрут'], ['brief', '📣 Приказ'], ['exam', '📝 Штурм-контрольная'], ['mystery', '🗝️ Шифровка'], ['ach', '🏅 Награды']];
+  const links = [['map', '🗺️ Маршрут'], ['cabinet', '📊 Кабинет'], ['brief', '📣 Приказ'], ['exam', '📝 Штурм-контрольная'], ['mystery', '🗝️ Шифровка'], ['ach', '🏅 Награды']];
   const nav = links.map(([id, label]) => `<a href="#${id}" ${active === id ? 'style="font-weight:bold"' : ''}>${label}</a>`).join(' · ');
   return `
     <div class="topbar">
@@ -584,7 +586,7 @@ async function loadRemoteManifest() {
     const m = await PLATFORM.manifest('pole6');
     DATA.remoteStages = (m.stages || []).filter(s => !DATA.caseList.some(c => c.id === s.id));
   } catch (e) { DATA.remoteStages = []; }
-  if (location.hash === '' || location.hash === '#map') renderMap();
+  if (location.hash === '' || location.hash === '#map' || location.hash === '#cabinet') route();
 }
 function remoteUnlocked(s) {
   return !!(s.free || (window.PLATFORM && PLATFORM.has('pole6', s.id)));
@@ -1229,6 +1231,235 @@ function renderAch() {
     ${footerHtml()}`;
 }
 
+/* ---------- личный кабинет ---------- */
+function cabWeek() {
+  const names = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+  const time = P().time || {};
+  const out = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = dateStr(-i);
+    out.push({ d: d, wd: names[new Date(d).getDay()], min: Math.round((time[d] || 0) / 60) });
+  }
+  return out;
+}
+function cabStages() {
+  const local = DATA.caseList.slice().sort((a, b) => a.num - b.num)
+    .map(c => ({ id: c.id, num: c.num, title: c.title, local: true }));
+  const remote = (DATA.remoteStages || []).filter(s => !DATA.caseList.some(c => c.id === s.id))
+    .map(s => ({ id: s.id, num: Number(s.id), title: s.title, local: false, unlocked: s.unlocked }));
+  return local.concat(remote).sort((a, b) => a.num - b.num);
+}
+function cabStats() {
+  const p = P();
+  let solved = 0, total = 0, clean = 0, hints = 0;
+  DATA.caseList.forEach(c => c.problems.forEach(pr => {
+    total++;
+    const e = p.problems[entryKey(c.id, pr.id)];
+    if (e && e.status === 'solved') {
+      solved++;
+      hints += e.hints || 0;
+      if (e.hints === 0 && !e.solution) clean++;
+    }
+  }));
+  const week = cabWeek();
+  const weekMin = week.reduce((s, x) => s + x.min, 0);
+  const days = new Set(week.map(x => x.d));
+  const weekSolved = (p.history || []).filter(h => h.k === 'solve' && days.has(h.d)).length;
+  return {
+    solved, total, clean, hints, week, weekMin, weekSolved,
+    independence: solved ? Math.round(clean / solved * 100) : 0,
+    activeDays: week.filter(x => x.min > 0).length,
+    best: p.exam && p.exam.best,
+    letters: (p.letters || []).length
+  };
+}
+function cabTopics() {
+  const p = P();
+  return DATA.caseList.slice().sort((a, b) => a.num - b.num).map(c => {
+    let total = c.problems.length, solved = 0, clean = 0, hints = 0;
+    c.problems.forEach(pr => {
+      const e = p.problems[entryKey(c.id, pr.id)];
+      if (e && e.status === 'solved') {
+        solved++;
+        hints += e.hints || 0;
+        if (e.hints === 0 && !e.solution) clean++;
+      }
+    });
+    return { num: c.num, title: c.title, total, solved, clean, hints, pct: solved ? Math.round(clean / solved * 100) : 0 };
+  });
+}
+function cabNext() {
+  const p = P();
+  const stages = DATA.caseList.slice().sort((a, b) => a.num - b.num);
+  for (const c of stages) {
+    if (p.bosses[c.id] && p.bosses[c.id].done) continue;
+    const pr = c.problems.find(x => !p.problems[entryKey(c.id, x.id)]);
+    if (pr) {
+      const idx = c.problems.indexOf(pr) + 1;
+      return { icon: c.emoji, title: 'Этап №' + c.num + ', задача ' + idx, note: pr.statement.slice(0, 90) + (pr.statement.length > 90 ? '…' : ''), link: '#case/' + c.id };
+    }
+    return { icon: c.emoji, title: 'Перевал этапа №' + c.num, note: 'Все задачи позади — осталось взять перевал', link: '#case/' + c.id };
+  }
+  const remote = (DATA.remoteStages || []).find(s => !DATA.caseList.some(c => c.id === s.id));
+  if (remote) {
+    return remote.unlocked
+      ? { icon: '🧭', title: 'Этап №' + remote.id + ': «' + remote.title + '»', note: 'Доступ открыт — открой этап и продолжай маршрут', link: '#map' }
+      : { icon: '🔒', title: 'Этап №' + remote.id + ': нужен код доступа', note: remote.title, link: '#map' };
+  }
+  return { icon: '🏅', title: 'Маршрут пройден', note: 'Все этапы закрыты — можно проходить контрольную заново', link: '#exam' };
+}
+function cabStuck() {
+  const p = P();
+  const out = [];
+  DATA.caseList.forEach(c => c.problems.forEach((pr, i) => {
+    const e = p.problems[entryKey(c.id, pr.id)];
+    const att = (p.attempts || {})[entryKey(c.id, pr.id)] || 0;
+    if (e && (e.hints >= 2 || att >= 2)) {
+      out.push({ num: c.num, i: i + 1, text: pr.statement.slice(0, 74) + (pr.statement.length > 74 ? '…' : ''), att, hints: e.hints || 0 });
+    }
+  }));
+  return out.sort((a, b) => (b.hints + b.att) - (a.hints + a.att)).slice(0, 5);
+}
+function cabNotes() {
+  const p = P();
+  const out = [];
+  DATA.caseList.forEach(c => c.problems.forEach((pr, i) => {
+    if (pr.type !== 'open') return;
+    const n = getNote(c.id + '/' + pr.id);
+    if (n && n.trim()) out.push({ num: c.num, i: i + 1, text: n.trim().slice(0, 180) });
+  }));
+  return out.slice(-3).reverse();
+}
+function renderCabinet() {
+  const p = P();
+  const tab = (store.ui && store.ui.cabinetTab) || 'child';
+  const s = cabStats();
+  const bars = s.week.map(x => `<div class="cab-bar ${x.min ? '' : 'zero'}"><b>${x.min || ''}</b><i style="height:${x.min ? Math.max(6, Math.round(x.min / Math.max(1, Math.max.apply(null, s.week.map(y => y.min))) * 100)) : 3}%"></i><span>${x.wd}</span></div>`).join('');
+  const tabs = `<div class="cab-tabs">
+    <button class="cab-tab ${tab === 'child' ? 'active' : ''}" data-act="cabTab" data-arg="child">Для полярника</button>
+    <button class="cab-tab ${tab === 'parent' ? 'active' : ''}" data-act="cabTab" data-arg="parent">Родителям</button>
+  </div>`;
+
+  let body = '';
+  if (tab === 'parent' && !store.adminAuthed) {
+    if (!store.admin.pin) {
+      body = `<div class="paper cab-pin"><h4>Родительский режим закрыт</h4>
+        <p>Сначала задайте PIN на странице <a href="#admin">🔑 Родителям</a> — он защитит статистику от любопытных.</p></div>`;
+    } else {
+      body = `<div class="paper cab-pin"><h4>Введите PIN</h4>
+        <p class="small">Родительский режим: время, темы и записи рассуждений.</p>
+        <div class="answer-row" style="justify-content:center"><input type="password" id="cab-pin" maxlength="4" placeholder="PIN"><button class="gold" data-act="cabPin">Войти</button></div>
+        <div id="cab-pin-res"></div></div>`;
+    }
+  } else if (tab === 'parent') {
+    const topics = cabTopics();
+    const rows = topics.map(t => `<tr>
+      <td>Этап ${t.num}. ${esc(t.title)}</td>
+      <td>${t.solved} / ${t.total}</td>
+      <td><div class="cab-meter"><div class="cab-track"><i class="${t.pct >= 80 ? '' : t.pct >= 65 ? 'mid' : 'low'}" style="width:${t.pct}%"></i></div><span>${t.pct}%</span></div></td>
+      <td>${t.hints}</td>
+      <td class="cab-small">${t.pct >= 80 ? 'Можно идти дальше' : t.pct >= 65 ? 'Повторить ключевой приём' : 'Стоит вернуться: много подсказок'}</td>
+    </tr>`).join('');
+    const stuck = cabStuck();
+    const notes = cabNotes();
+    const nextSafe = DATA.safes.findIndex((thr, i) => p.safesOpened.indexOf(i) < 0);
+    body = `
+      <div class="cab-grid">
+        <div class="cab-stat"><div class="k">Время за неделю</div><div class="v">${Math.floor(s.weekMin / 60)} ч ${String(s.weekMin % 60).padStart(2, '0')} <small>мин</small></div><div class="d">${s.weekMin ? 'занятий: ' + s.activeDays + ' из 7' : 'пока нет данных'}</div></div>
+        <div class="cab-stat"><div class="k">Задач за неделю</div><div class="v">${s.weekSolved}</div><div class="d">всего решено: ${s.solved}</div></div>
+        <div class="cab-stat"><div class="k">Самостоятельность</div><div class="v">${s.independence}%</div><div class="d ${s.independence < 60 ? 'warn' : ''}">без подсказок: ${s.clean}</div></div>
+        <div class="cab-stat"><div class="k">Дней с занятиями</div><div class="v">${s.activeDays} <small>из 7</small></div><div class="d ${s.activeDays < 3 ? 'warn' : ''}">${s.activeDays < 3 ? 'мало для привычки' : 'хороший ритм'}</div></div>
+      </div>
+      <div class="paper" style="margin-top:12px"><h4>Темы: где уверен, а где нужна помощь</h4>
+        <table class="cab-table"><thead><tr><th>Этап</th><th>Задач</th><th>Без подсказок</th><th>Подсказки</th><th>Что сделать</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="cab-small">Пока нет решённых задач.</td></tr>'}</tbody></table>
+      </div>
+      <div class="cab-two" style="margin-top:12px">
+        <div class="paper"><h4>Где застревал(а)</h4>
+          ${stuck.length ? '<ul class="cab-list">' + stuck.map(x => `<li><span class="ico">⏳</span><div><b>Этап ${x.num}, задача ${x.i}</b><div class="meta">попыток: ${x.att} · подсказок: ${x.hints}</div><div class="cab-small">${esc(x.text)}</div></div></li>`).join('') + '</ul>' : '<p class="small muted">Задач с несколькими попытками пока нет — хороший знак.</p>'}
+          <p class="cab-small">Это не ошибки, а карта для разговора: попросите пересказать, как считали.</p>
+        </div>
+        <div class="paper"><h4>Записи рассуждений</h4>
+          ${notes.length ? notes.map(n => `<div class="cab-note"><b>Этап ${n.num}, задача ${n.i}</b>${esc(n.text)}</div>`).join('') : '<p class="small muted">Пока нет записей — они появляются в «бумажных» задачах.</p>'}
+          <div class="cab-actions"><button class="gold" data-act="cabPrint">Печать отчёта</button><button data-act="goto" data-arg="#admin">Все записи и призы</button></div>
+        </div>
+      </div>
+      <div class="paper" style="margin-top:12px"><h4>Призы</h4>
+        <p>Открыто ящиков: <b>${p.safesOpened.length} из ${DATA.safes.length}</b> · монет: <b>${p.points}</b>${nextSafe >= 0 ? ' · до следующего ящика: <b>' + (DATA.safes[nextSafe] - p.points) + ' 🪙</b>' : ' · все ящики вскрыты'}.</p>
+        <p class="small muted">Призы настраиваются в разделе «Родителям» на этом устройстве. Публичных рейтингов нет.</p>
+      </div>`;
+  } else {
+    const stages = cabStages();
+    const route = stages.map((st, idx) => {
+      let cls = 'locked', status = 'закрыт';
+      if (st.local) {
+        const c = DATA.caseList.find(x => x.id === st.id);
+        const done = p.bosses[st.id] && p.bosses[st.id].done;
+        if (done) { cls = 'done'; status = '✓ ' + c.problems.length + ' из ' + c.problems.length; }
+        else if (caseUnlocked(DATA.caseList.indexOf(c))) { cls = 'current'; status = 'сейчас · ' + caseStats(c).closed + ' из ' + c.problems.length; }
+        else { status = '🔒 сначала предыдущий'; }
+      } else {
+        cls = st.unlocked ? 'current' : 'locked';
+        status = st.unlocked ? 'доступ открыт' : '🔒 нужен код';
+      }
+      return `<div class="cab-stop ${cls}"><div class="cab-dot">${cls === 'locked' ? '🔒' : (st.local ? DATA.caseList.find(x => x.id === st.id).emoji : '🧭')}</div><div class="nm">${esc(st.title)}</div><div class="st">${status}</div></div>`;
+    }).join('');
+    const topics = cabTopics();
+    const topicBars = topics.map(t => `<div class="cab-topic"><div class="row"><span>${esc(t.title)}</span><span>${t.solved ? t.pct + '% без подсказок' : 'ещё не начат'}</span></div><div class="cab-track"><i class="${t.pct >= 80 ? '' : t.pct >= 65 ? 'mid' : 'low'}" style="width:${t.solved ? t.pct : 0}%"></i></div></div>`).join('');
+    const next = cabNext();
+    const journal = Object.keys(p.junctions || {}).map(jid => {
+      const j = (DATA.junctions || []).find(x => x.id === jid);
+      const st = p.junctions[jid];
+      if (!j || !st) return '';
+      const o = j.options[st.choice];
+      return `<li><span class="ico">${j.emoji}</span><div><b>${esc(j.title)}</b><div class="meta">${esc(o.label)}${st.coins ? ' · +' + st.coins + ' 🪙' : ''}</div></div></li>`;
+    }).filter(Boolean).join('');
+    body = `
+      <div class="paper"><h4>Маршрут экспедиции</h4>
+        <div class="cab-route">${route}</div>
+        <p class="cab-small">Открыто букв шифровки: ${s.letters} из ${DATA.mystery.word.length}. ${s.best !== null && s.best !== undefined ? 'Лучшая контрольная: ' + s.best + ' из ' + DATA.exam.problems.length + '.' : 'Контрольная ещё впереди.'}</p>
+      </div>
+      <div class="cab-grid" style="margin-top:12px">
+        <div class="cab-stat"><div class="k">Решено задач</div><div class="v">${s.solved}</div><div class="d">за неделю: +${s.weekSolved}</div></div>
+        <div class="cab-stat"><div class="k">Без подсказок</div><div class="v">${s.clean}</div><div class="d">${s.independence}% от решённых</div></div>
+        <div class="cab-stat"><div class="k">Контрольная</div><div class="v">${s.best === null || s.best === undefined ? '—' : s.best} <small>${s.best === null || s.best === undefined ? '' : 'из ' + DATA.exam.problems.length}</small></div><div class="d">${s.best >= 5 ? 'буква получена' : 'нужно 5 из 8'}</div></div>
+        <div class="cab-stat"><div class="k">Шифровка</div><div class="v">${s.letters} <small>из ${DATA.mystery.word.length}</small></div><div class="d ${s.letters < 3 ? 'warn' : ''}">${s.letters < 3 ? 'собирай буквы' : 'можно пробовать слово'}</div></div>
+      </div>
+      <div class="cab-two" style="margin-top:12px">
+        <div class="paper"><h4>Эта неделя</h4>
+          <div class="cab-bars" role="img" aria-label="Минуты занятий по дням">${bars}</div>
+          <p class="cab-small">${Math.floor(s.weekMin / 60)} ч ${String(s.weekMin % 60).padStart(2, '0')} мин за неделю · серия ${(p.flame && p.flame.streak) || 0} 🔥 (рекорд ${(p.flame && p.flame.best) || 0})</p>
+        </div>
+        <div class="paper"><h4>Как идут темы</h4>${topicBars || '<p class="small muted">Пока нет данных — реши первую задачу.</p>'}</div>
+      </div>
+      <div class="cab-two" style="margin-top:12px">
+        <div class="paper"><h4>Что дальше</h4>
+          <ul class="cab-list"><li><span class="ico">${next.icon}</span><div><b>${esc(next.title)}</b><div class="meta">${esc(next.note)}</div></div></li></ul>
+          <div class="cab-actions"><button class="gold" data-act="cabGo" data-arg="${next.link}">Продолжить</button><button data-act="goto" data-arg="#mystery">К шифровке</button></div>
+        </div>
+        <div class="paper"><h4>Бортовой журнал</h4>
+          ${journal ? '<ul class="cab-list">' + journal + '</ul>' : '<p class="small muted">Развилки появятся после первого перевала.</p>'}
+        </div>
+      </div>`;
+  }
+
+  $('app').innerHTML = headerHtml('cabinet') + `
+    <div class="case-head"><h2>📊 Личный кабинет</h2><span class="backlink"><a href="#map">← к маршруту</a></span></div>
+    ${tabs}
+    ${body}
+    ${footerHtml()}`;
+}
+function cabPinCheck() {
+  const el = $('cab-pin');
+  if (!el) return;
+  if (btoa(el.value) === store.admin.pin) {
+    store.adminAuthed = true;
+    saveStore();
+    renderCabinet();
+  } else {
+    $('cab-pin-res').innerHTML = '<span class="result-bad">Неверный PIN.</span>';
+  }
+}
+
 /* ---------- профиль ---------- */
 function renderProfilePage() {
   const p = P();
@@ -1475,6 +1706,16 @@ document.addEventListener('click', (ev) => {
     case 'junctionChoose': { const [jid, idx] = arg.split('|'); junctionChoose(jid, +idx); break; }
     case 'junctionClaim': junctionClaim(arg); break;
     case 'openRemote': openRemoteStage(arg); break;
+    case 'cabTab': {
+      store.ui = store.ui || {};
+      store.ui.cabinetTab = arg;
+      saveStore();
+      renderCabinet();
+      break;
+    }
+    case 'cabPin': cabPinCheck(); break;
+    case 'cabPrint': window.print(); break;
+    case 'cabGo': location.hash = arg.replace(/^#/, ''); route(); break;
     case 'hint': { const [cid, pid, lvl] = arg.split('|'); hintPressed(cid, pid, +lvl); break; }
     case 'viewSolution': { const [cid, pid] = arg.split('|'); solutionPressed(cid, pid); break; }
     case 'confirmSolution': { const [cid, pid] = arg.split('|'); confirmSolution(cid, pid); break; }
@@ -1535,7 +1776,7 @@ document.addEventListener('click', (ev) => {
         name: old.name, emoji: old.emoji, created: today(), briefed: true,
         points: 0, problems: {}, notes: {}, bosses: {}, earlyUnlock: {},
         letters: [], mysterySolved: false, solvedV1: old.solvedV1, achievements: [],
-        activity: [], views: {}, junctions: {},
+        activity: [], views: {}, junctions: {}, time: {},
         exam: { best: null, started: null, answers: {}, submitted: false },
         safesOpened: []
       };
@@ -1617,6 +1858,18 @@ document.addEventListener('keydown', (ev) => {
 /* ---------- старт ---------- */
 applyTheme();
 route();
+/* учёт времени занятий: 30 секунд активной вкладки */
+setInterval(function () {
+  try {
+    if (document.visibilityState !== 'visible') return;
+    const p = P();
+    if (!p) return;
+    p.time = p.time || {};
+    const d = today();
+    p.time[d] = (p.time[d] || 0) + 30;
+    saveStore();
+  } catch (e) { /* не мешаем игре */ }
+}, 30000);
 window.onPlatformChange = function () {
   if (window.PLATFORM) PLATFORM.refresh().then(function () { loadRemoteManifest(); route(); });
 };
